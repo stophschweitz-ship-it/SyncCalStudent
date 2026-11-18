@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Unified Calendar</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+
+  <!-- ONBOARDING: Name + Mandatory Integration Logins -->
+  <div id="onboardingOverlay" class="onboarding-overlay" role="dialog" aria-modal="true">
+    <div class="onboarding-card">
+      <div class="onboarding-header">
+        <div class="brand-mark">
+          <span class="brand-circle"></span>
+          <span class="brand-title">Unified Calendar</span>
+        </div>
+        <span class="step-tag">SETUP &amp; LIVE SYNC</span>
+      </div>
+
+      <div class="field-group">
+        <label class="field-label" for="studentNameInput">Your Name</label>
+        <input
+          id="studentNameInput"
+          type="text"
+          class="minimal-input"
+          placeholder="Enter your name"
+          autocomplete="name"
+        />
+      </div>
+
+      <div class="field-group">
+        <label class="field-label">Configure Integrations (Canvas, Virtual Virginia, Gmail, Outlook, Teams)</label>
+        <div id="onboardingIntegrationsList" class="integrations-login-list">
+          <!-- Populated by app.js -->
+        </div>
+      </div>
+
+      <div id="syncStatusBanner" class="meta-mono" style="display:none; padding:8px 10px; border:1px solid var(--line);"></div>
+
+      <div class="onboarding-footer">
+        <span id="connectedCountSummary" class="step-tag">0 logins active</span>
+        <div style="display:flex; gap:8px;">
+          <button type="button" id="testLiveSyncBtn" class="btn-flat">Sync Live Feeds</button>
+          <button type="button" id="launchCalendarBtn" class="btn-accent">Continue</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ADD EVENT MODAL -->
+  <div id="eventModal" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div class="modal-card">
+      <div style="display:flex; justify-content:space-between; align-items:center;">
+        <span style="font-weight:600; font-size:14px;">New Activity</span>
+        <button type="button" id="closeEventModalBtn" class="btn-circle">✕</button>
+      </div>
+
+      <form id="addEventForm" style="display:flex; flex-direction:column; gap:12px;">
+        <div class="field-group">
+          <label class="field-label" for="evTitle">Title</label>
+          <input id="evTitle" type="text" class="minimal-input" placeholder="Activity title" required />
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-group">
+            <label class="field-label" for="evCategory">Activity Type</label>
+            <select id="evCategory" class="minimal-input">
+              <option value="duedates">Due Dates</option>
+              <option value="clubs">Clubs</option>
+              <option value="mentorship">Mentorship</option>
+              <option value="email">Email Dates</option>
+              <option value="sports">Sports</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="evIntegration">Integration</label>
+            <select id="evIntegration" class="minimal-input">
+              <option value="canvas">Canvas</option>
+              <option value="canvas2">Canvas (2)</option>
+              <option value="vva">Virtual Virginia</option>
+              <option value="gmail">Gmail</option>
+              <option value="outlook">Outlook</option>
+              <option value="teams">Teams</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-group">
+            <label class="field-label" for="evDate">Date</label>
+            <input id="evDate" type="date" class="minimal-input" required />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="evTime">Time</label>
+            <input id="evTime" type="time" class="minimal-input" value="15:00" required />
+          </div>
+        </div>
+
+        <div class="form-row-2">
+          <div class="field-group">
+            <label class="field-label" for="evLocation">Details / Location</label>
+            <input id="evLocation" type="text" class="minimal-input" placeholder="Optional details" />
+          </div>
+          <div class="field-group">
+            <label class="field-label" for="evColor">Activity Color</label>
+            <input id="evColor" type="color" class="minimal-input" value="#6366f1" style="height:37px; padding:4px; cursor:pointer;" />
+          </div>
+        </div>
+
+        <div style="display:flex; justify-content:flex-end; gap:8px; margin-top:4px;">
+          <button type="button" id="cancelEventModalBtn" class="btn-flat">Cancel</button>
+          <button type="submit" class="btn-accent">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- MAIN SHELL -->
+  <div class="app-shell">
+    <!-- TOP BAR -->
+    <header class="topbar">
+      <div class="topbar-left">
+        <div class="brand-mark">
+          <span class="brand-circle"></span>
+          <span class="brand-title">Calendar</span>
+        </div>
+
+        <div class="date-nav">
+          <button type="button" id="prevPeriodBtn" class="btn-circle" aria-label="Previous">‹</button>
+          <button type="button" id="todayBtn" class="btn-flat">Today</button>
+          <button type="button" id="nextPeriodBtn" class="btn-circle" aria-label="Next">›</button>
+          <span id="currentPeriodLabel" class="period-title">November 2026</span>
+        </div>
+      </div>
+
+      <nav class="view-switcher" aria-label="Views">
+        <button type="button" class="view-tab active" data-view="month">
+          <span class="view-tab-dot"></span> Month
+        </button>
+        <button type="button" class="view-tab" data-view="week">
+          <span class="view-tab-dot"></span> Week
+        </button>
+        <button type="button" class="view-tab" data-view="todo">
+          <span class="view-tab-dot"></span> To-Do
+        </button>
+        <button type="button" class="view-tab" data-view="orbit">
+          <span class="view-tab-dot"></span> Orbit
+        </button>
+        <button type="button" class="view-tab" data-view="timeline">
+          <span class="view-tab-dot"></span> Stream
+        </button>
+      </nav>
+
+      <div class="topbar-right">
+        <input id="searchInput" type="search" class="minimal-input" style="padding:5px 10px; font-size:12px; width:150px;" placeholder="Filter..." />
+        <button type="button" id="syncNowTopBtn" class="btn-flat" title="Run live sync across connected accounts">Sync</button>
+        <button type="button" id="openNewEventBtn" class="btn-accent" style="padding:6px 12px;">+ New</button>
+        <button type="button" id="profileTrigger" class="btn-flat" title="Edit name and logins">
+          <span id="studentNameTop">Student</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- LEFT SIDEBAR -->
+    <aside class="sidebar-left">
+      <div class="sidebar-group">
+        <div class="sidebar-label">
+          <span>Activities &amp; Colors</span>
+          <button type="button" id="resetCategoriesBtn" style="background:none;border:none;color:var(--accent);font-family:var(--font-mono);font-size:10px;cursor:pointer;">ALL</button>
+        </div>
+        <div id="categoryFilterList"></div>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-label">
+          <span>Integrations</span>
+          <button type="button" id="manageLoginsBtn" style="background:none;border:none;color:var(--accent);font-family:var(--font-mono);font-size:10px;cursor:pointer;">LOGINS</button>
+        </div>
+        <div id="integrationFilterList"></div>
+      </div>
+
+      <div class="sidebar-group" style="margin-top:auto;">
+        <div class="sidebar-label">
+          <span>Live Sync &amp; .ics</span>
+        </div>
+        <button type="button" id="sidebarSyncBtn" class="btn-flat" style="width:100%; margin-bottom:6px;">
+          Sync All Logins
+        </button>
+        <button type="button" id="completePastBtn" class="btn-flat" style="width:100%; margin-bottom:6px;">
+          Complete Past Tasks
+        </button>
+        <label class="btn-flat" style="text-align:center; display:block;">
+          Import .ics File
+          <input id="icsFileInput" type="file" accept=".ics,text/calendar" style="display:none;" />
+        </label>
+        <div id="sidebarSyncStatus" class="meta-mono" style="margin-top:4px;"></div>
+      </div>
+    </aside>
+
+    <!-- MAIN VIEW -->
+    <main id="viewContainer" class="main-stage"></main>
+
+    <!-- RIGHT INSPECTOR -->
+    <aside class="sidebar-right">
+      <div class="inspector-header">
+        <div id="inspectorWeekday" class="inspector-sub">TUESDAY</div>
+        <div id="inspectorDateTitle" class="inspector-date">Nov 17, 2026</div>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-label">
+          <span>Selected Day</span>
+          <button type="button" id="quickAddSelectedDayBtn" style="background:none;border:none;color:var(--accent);font-family:var(--font-mono);font-size:10px;cursor:pointer;">+ ADD</button>
+        </div>
+        <div id="inspectorEventsList" class="inspector-list"></div>
+      </div>
+    </aside>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
