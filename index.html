@@ -34,7 +34,17 @@
       </div>
 
       <div class="field-group">
-        <label class="field-label">Configure Integrations (Canvas, Virtual Virginia, Gmail, Outlook, Teams)</label>
+        <label class="field-label">Configure Calendars (Canvas, Gmail, Outlook, Teams)</label>
+        <div class="add-calendar-bar" style="display:flex; gap:8px; margin-bottom:10px; align-items:center;">
+          <select id="addCalType" class="minimal-input" style="width:140px; flex-shrink:0;">
+            <option value="canvas">Canvas</option>
+            <option value="gmail">Gmail</option>
+            <option value="outlook">Outlook</option>
+            <option value="teams">Teams</option>
+          </select>
+          <input id="addCalName" type="text" class="minimal-input" placeholder="Calendar name (e.g. School Canvas)" />
+          <button type="button" id="addCalBtn" class="btn-flat" style="white-space:nowrap;">+ Add Calendar</button>
+        </div>
         <div id="onboardingIntegrationsList" class="integrations-login-list">
           <!-- Populated by app.js -->
         </div>
@@ -78,14 +88,9 @@
             </select>
           </div>
           <div class="field-group">
-            <label class="field-label" for="evIntegration">Integration</label>
+            <label class="field-label" for="evIntegration">Calendar</label>
             <select id="evIntegration" class="minimal-input">
-              <option value="canvas">Canvas</option>
-              <option value="canvas2">Canvas (2)</option>
-              <option value="vva">Virtual Virginia</option>
-              <option value="gmail">Gmail</option>
-              <option value="outlook">Outlook</option>
-              <option value="teams">Teams</option>
+              <!-- Populated by app.js -->
             </select>
           </div>
         </div>

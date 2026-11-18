@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 Unified Student Calendar — Live Sync Backend Server
-Supports real live syncing for all 5 mandatory integrations:
+Supports real live syncing for:
   1. Canvas (Canvas LMS REST API v1 + iCal .ics feed)
-  2. Virtual Virginia (VVA Canvas LMS REST API v1 + iCal .ics feed)
-  3. Gmail (Google Gmail API + Google Calendar API + IMAP SSL + iCal .ics feed)
-  4. Outlook (Microsoft Graph API Calendar/Mail + Office365 IMAP SSL + iCal .ics feed)
-  5. Teams (Microsoft Graph API Online Meetings/Calendar/Teams + Exchange .ics feed)
+  2. Gmail (Google Gmail API + Google Calendar API + IMAP SSL + iCal .ics feed)
+  3. Outlook (Microsoft Graph API Calendar/Mail + Office365 IMAP SSL + iCal .ics feed)
+  4. Teams (Microsoft Graph API Online Meetings/Calendar/Teams + Exchange .ics feed)
 """
 
 import datetime
@@ -31,10 +30,10 @@ SSL_CTX = ssl.create_default_context()
 def classify_student_category(title: str, description: str = "", default_cat: str = "duedates", integration_id: str = "") -> str:
     """Auto-classify synced items into the 5 student streams:
     duedates, clubs, mentorship, email, sports.
-    Canvas platforms (canvas, vva) can be anything except sports.
+    Canvas platforms can be anything except sports.
     """
     text = f"{title} {description}".lower()
-    is_canvas_platform = integration_id in ("canvas", "canvas2", "vva")
+    is_canvas_platform = integration_id == "canvas" or integration_id.startswith("canvas")
 
     if not is_canvas_platform and any(w in text for w in ["sport", "track", "varsity", "conditioning", "coach", "game", "meet", "athletic", "gym", "soccer", "basketball", "swim", "tennis"]):
         return "sports"
@@ -47,15 +46,14 @@ def classify_student_category(title: str, description: str = "", default_cat: st
     return default_cat
 
 
-def dedupe_vva_events(events: list) -> list:
-    """For Virtual Virginia, assignments often appear as duplicate pairs on the same date
+def dedupe_canvas_events(events: list) -> list:
+    """Deduplicate Canvas assignments that appear as duplicate pairs on the same date
     (e.g., 'Unit 4 Quiz' and 'Unit 4 Quiz [Course Name]'). Keep the shorter title for each pair.
     """
     def norm(t: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9\s]", " ", t.lower())).strip()
 
     kept = []
-    # Sort shortest title first so shorter titles are evaluated first
     for ev in sorted(events, key=lambda e: len(e.get("title", ""))):
         ev_norm = norm(ev.get("title", ""))
         is_dup = False
@@ -71,8 +69,8 @@ def dedupe_vva_events(events: list) -> list:
     return kept
 
 
-def is_vva_excluded(title: str, description: str = "") -> bool:
-    """Return True if a Virtual Virginia event should be auto-filtered out
+def is_canvas_excluded(title: str, description: str = "") -> bool:
+    """Return True if a Canvas event should be auto-filtered out
     (Q/A sessions, OpenStax, or AP Daily Videos except AP Daily Video Review).
     """
     text = f"{title} {description}".lower()
@@ -80,7 +78,7 @@ def is_vva_excluded(title: str, description: str = "") -> bool:
         return True
     if "openstax" in text:
         return True
-    if "ap daily video" in text and "ap daily video review" not in text:
+    if "daily video" in text and "daily video review" not in text:
         return True
     return False
 
@@ -173,7 +171,7 @@ def parse_ics_feed(ics_text: str, integration_id: str, default_category: str = "
         desc = desc_m.group(1).strip().replace("\\n", " ")[:200] if desc_m else ""
         uid = uid_m.group(1).strip() if uid_m else f"{integration_id}-{idx}-{date_str}"
 
-        if integration_id == "vva" and is_vva_excluded(title, f"{loc} {desc}"):
+        if (integration_id == "canvas" or integration_id.startswith("canvas")) and is_canvas_excluded(title, f"{loc} {desc}"):
             continue
 
         category = classify_student_category(title, f"{loc} {desc}", default_category, integration_id)
@@ -188,7 +186,7 @@ def parse_ics_feed(ics_text: str, integration_id: str, default_category: str = "
             "completed": False
         })
 
-    return events
+    return dedupe_canvas_events(events)
 
 
 def parse_iso_datetime(iso_str: str):
@@ -213,10 +211,10 @@ def parse_iso_datetime(iso_str: str):
 
 
 # =========================================================
-# 1 & 2. CANVAS & VIRTUAL VIRGINIA SYNC
+# 1. CANVAS SYNC
 # =========================================================
-def sync_canvas_or_vva(integration_id: str, config: dict) -> list:
-    """Syncs Canvas or Virtual Virginia via:
+def sync_canvas(integration_id: str, config: dict) -> list:
+    """Syncs Canvas via:
     - iCal Feed URL (.ics) if provided (either in icsUrl, domain, or token field)
     - Canvas REST API v1 (/api/v1/planner/items + /api/v1/users/self/upcoming_events) via Access Token
     """
@@ -249,9 +247,9 @@ def sync_canvas_or_vva(integration_id: str, config: dict) -> list:
 
     # If api_token is provided and isn't just an ics URL
     if api_token and not (api_token.startswith("http") or api_token.startswith("webcal")):
-        target_domain = base_url if (base_url and not base_url.startswith("http") and not ".ics" in base_url) else ""
+        target_domain = base_url if (base_url and ".ics" not in base_url.lower() and "feed" not in base_url.lower()) else ""
         if not target_domain:
-            target_domain = "virtualvirginia.instructure.com" if integration_id == "vva" else "canvas.instructure.com"
+            target_domain = "canvas.instructure.com"
         if not target_domain.startswith("http"):
             target_domain = "https://" + target_domain
         target_domain = target_domain.rstrip("/")
@@ -269,11 +267,13 @@ def sync_canvas_or_vva(integration_id: str, config: dict) -> list:
                 for item in items:
                     plannable = item.get("plannable") or {}
                     title = plannable.get("title") or item.get("context_name") or "Canvas Item"
+                    if is_canvas_excluded(title, context_name):
+                        continue
                     raw_dt = item.get("plannable_date") or plannable.get("due_at") or plannable.get("todo_date")
                     date_str, time_str = parse_iso_datetime(raw_dt)
                     if not date_str:
                         continue
-                    context_name = item.get("context_name") or ("Virtual Virginia" if integration_id == "vva" else "Canvas")
+                    context_name = item.get("context_name") or "Canvas"
                     submitted = bool((item.get("submissions") or {}).get("submitted"))
                     uid = f"{integration_id}-planner-{item.get('plannable_id') or title}"
                     if uid in seen_ids:
@@ -301,6 +301,8 @@ def sync_canvas_or_vva(integration_id: str, config: dict) -> list:
             if isinstance(upcoming, list):
                 for ev in upcoming:
                     title = ev.get("title") or "Course Event"
+                    if is_canvas_excluded(title, ev.get("description") or ""):
+                        continue
                     assignment = ev.get("assignment") or {}
                     raw_dt = assignment.get("due_at") or ev.get("start_at") or ev.get("end_at")
                     date_str, time_str = parse_iso_datetime(raw_dt)
@@ -332,10 +334,7 @@ def sync_canvas_or_vva(integration_id: str, config: dict) -> list:
             raise ValueError(f"{integration_id.upper()} requires either a Calendar Feed (.ics) URL or a Canvas API Access Token.")
         raise RuntimeError(f"Connected to {integration_id.upper()}, but found 0 events within the date range.")
 
-    if integration_id == "vva":
-        events = dedupe_vva_events(events)
-
-    return events
+    return dedupe_canvas_events(events)
 
 
 # =========================================================
@@ -429,7 +428,7 @@ def sync_imap_mailbox(imap_host: str, username: str, password: str, integration_
         mail.select("INBOX", readonly=True)
         status, data = mail.search(None, "ALL")
         if status != "OK" or not data or not data[0]:
-            return events
+            return dedupe_canvas_events(events)
 
         msg_ids = data[0].split()[-25:]  # Inspect latest 25 emails
         for mid in reversed(msg_ids):
@@ -473,13 +472,13 @@ def sync_imap_mailbox(imap_host: str, username: str, password: str, integration_
         except Exception:
             pass
 
-    return events
+    return dedupe_canvas_events(events)
 
 
 # =========================================================
 # 3. GMAIL SYNC (Google APIs + IMAP + iCal)
 # =========================================================
-def sync_gmail(config: dict) -> list:
+def sync_gmail(config: dict, integration_id: str = "gmail") -> list:
     ics_url = (config.get("icsUrl") or "").strip()
     token = (config.get("token") or "").strip()
     username = (config.get("username") or "").strip()
@@ -510,7 +509,7 @@ def sync_gmail(config: dict) -> list:
                     "id": f"gcal-{item.get('id')}",
                     "title": title,
                     "category": classify_student_category(title, item.get("description") or "", "email"),
-                    "integration": "gmail",
+                    "integration": integration_id,
                     "date": date_str,
                     "time": time_str,
                     "location": item.get("location") or "Google Calendar",
@@ -535,7 +534,7 @@ def sync_gmail(config: dict) -> list:
                         "id": f"gmail-msg-{m_ref['id']}",
                         "title": subj,
                         "category": classify_student_category(subj, snippet, "email"),
-                        "integration": "gmail",
+                        "integration": integration_id,
                         "date": dt_str,
                         "time": tm_str,
                         "location": "Gmail Inbox",
@@ -551,13 +550,14 @@ def sync_gmail(config: dict) -> list:
     if not events and not ics_url and not token and not password:
         raise ValueError("Gmail requires a Google OAuth token, a Gmail App Password (IMAP), or a Google Calendar .ics URL.")
 
-    return events
+    return dedupe_canvas_events(events)
 
 
 # =========================================================
 # 4 & 5. OUTLOOK & MICROSOFT TEAMS SYNC (Microsoft Graph + IMAP + iCal)
 # =========================================================
-def sync_outlook_or_teams(integration_id: str, config: dict) -> list:
+def sync_outlook_or_teams(provider_type: str, config: dict, integration_id: str = None) -> list:
+    integration_id = integration_id or provider_type
     ics_url = (config.get("icsUrl") or "").strip()
     token = (config.get("token") or "").strip()
     username = (config.get("username") or "").strip()
@@ -626,7 +626,7 @@ def sync_outlook_or_teams(integration_id: str, config: dict) -> list:
                             "id": f"msmail-{msg.get('id', subj)[:14]}",
                             "title": subj,
                             "category": classify_student_category(subj, preview, "email"),
-                            "integration": "outlook",
+                            "integration": integration_id,
                             "date": dt_str,
                             "time": tm_str,
                             "location": "Outlook Inbox",
@@ -642,7 +642,7 @@ def sync_outlook_or_teams(integration_id: str, config: dict) -> list:
     if not events and not ics_url and not token and not password:
         raise ValueError(f"{integration_id.upper()} requires a Microsoft Graph OAuth token, an Outlook/Exchange .ics URL, or IMAP credentials.")
 
-    return events
+    return dedupe_canvas_events(events)
 
 
 # =========================================================
@@ -672,7 +672,7 @@ class CalendarServerHandler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/api/health":
             self._send_json(200, {
                 "status": "ok",
-                "integrations": ["canvas", "vva", "gmail", "outlook", "teams"]
+                "integrations": ["canvas", "gmail", "outlook", "teams"]
             })
             return
         super().do_GET()
@@ -691,19 +691,21 @@ class CalendarServerHandler(http.server.SimpleHTTPRequestHandler):
             synced_events = []
             statuses = {}
 
-            for int_id in ["canvas", "canvas2", "vva", "gmail", "outlook", "teams"]:
-                cfg = integrations_cfg.get(int_id) or {}
+            for int_id, cfg in integrations_cfg.items():
+                if not isinstance(cfg, dict):
+                    continue
                 if not cfg.get("connected"):
                     statuses[int_id] = {"ok": False, "skipped": True, "count": 0, "message": "Disabled"}
                     continue
 
+                provider_type = cfg.get("type") or int_id
                 try:
-                    if int_id in ("canvas", "canvas2", "vva"):
-                        evs = sync_canvas_or_vva(int_id, cfg)
-                    elif int_id == "gmail":
-                        evs = sync_gmail(cfg)
-                    elif int_id in ("outlook", "teams"):
-                        evs = sync_outlook_or_teams(int_id, cfg)
+                    if provider_type == "canvas" or provider_type.startswith("canvas"):
+                        evs = sync_canvas(int_id, cfg)
+                    elif provider_type == "gmail":
+                        evs = sync_gmail(cfg, integration_id=int_id)
+                    elif provider_type in ("outlook", "teams"):
+                        evs = sync_outlook_or_teams(provider_type, cfg, integration_id=int_id)
                     else:
                         evs = []
 

@@ -1,7 +1,7 @@
 /**
  * Unified Student Calendar — Live Edition
  * Activities: Due Dates, Clubs, Mentorship, Email Dates, Sports
- * Integrations: Canvas, Virtual Virginia, Gmail, Outlook, Teams
+ * Integrations: Canvas, Gmail, Outlook, Teams (unlimited named calendars)
  */
 
 const CATEGORIES = {
@@ -12,56 +12,75 @@ const CATEGORIES = {
   sports: { id: 'sports', name: 'Sports', defaultColor: '#6366f1' }
 };
 
-const INTEGRATIONS = {
+const PROVIDER_TYPES = {
   canvas: {
-    id: 'canvas',
+    type: 'canvas',
     name: 'Canvas',
     sub: 'LMS API / iCal Feed',
+    defaultDomain: '',
     field1Label: 'Canvas Domain (e.g. school.instructure.com)',
     field2Label: 'Canvas API Access Token (optional if .ics set)',
     icsLabel: 'Canvas Calendar Feed (.ics URL)'
   },
-  canvas2: {
-    id: 'canvas2',
-    name: 'Canvas (2)',
-    sub: 'Second Canvas LMS / iCal Feed',
-    field1Label: 'Canvas Domain (e.g. college.instructure.com)',
-    field2Label: 'Canvas API Access Token (optional if .ics set)',
-    icsLabel: 'Canvas (2) Calendar Feed (.ics URL)'
-  },
-  vva: {
-    id: 'vva',
-    name: 'Virtual Virginia',
-    sub: 'VVA LMS API / iCal Feed',
-    field1Label: 'VVA Domain (virtualvirginia.instructure.com)',
-    field2Label: 'VVA API Access Token (optional if .ics set)',
-    icsLabel: 'Virtual Virginia Calendar Feed (.ics URL)'
-  },
   gmail: {
-    id: 'gmail',
+    type: 'gmail',
     name: 'Gmail',
     sub: 'Google API / IMAP / iCal',
+    defaultDomain: 'imap.gmail.com',
     field1Label: 'Gmail Address',
     field2Label: 'Google OAuth Token or App Password (IMAP)',
     icsLabel: 'Google Calendar Secret .ics URL (optional)'
   },
   outlook: {
-    id: 'outlook',
+    type: 'outlook',
     name: 'Outlook',
     sub: 'Microsoft Graph / IMAP / iCal',
-    field1Label: 'School Outlook Email',
+    defaultDomain: 'outlook.office365.com',
+    field1Label: 'Outlook Email',
     field2Label: 'MS Graph Bearer Token or App Password',
     icsLabel: 'Outlook Published Calendar .ics URL (optional)'
   },
   teams: {
-    id: 'teams',
+    type: 'teams',
     name: 'Teams',
     sub: 'MS Graph Meetings / Exchange iCal',
+    defaultDomain: 'graph.microsoft.com',
     field1Label: 'Teams Account Email',
     field2Label: 'Microsoft Graph Bearer Token (OnlineMeetings)',
     icsLabel: 'Teams / Exchange Calendar .ics URL (optional)'
   }
 };
+
+function createCalendarEntry(id, type, name) {
+  const provider = PROVIDER_TYPES[type] || PROVIDER_TYPES.canvas;
+  return {
+    id,
+    type: provider.type,
+    name: name || provider.name,
+    connected: false,
+    domain: provider.defaultDomain || '',
+    username: '',
+    password: '',
+    token: '',
+    icsUrl: ''
+  };
+}
+
+function escapeHtml(str) {
+  return String(str ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function getCalendarName(id) {
+  const cal = state.integrationsAuth[id];
+  if (cal && cal.name) return cal.name;
+  if (cal && PROVIDER_TYPES[cal.type]) return PROVIDER_TYPES[cal.type].name;
+  return PROVIDER_TYPES[id]?.name || id || '';
+}
 
 function offsetDateStr(baseDate, dayOffset) {
   const d = new Date(baseDate.getFullYear(), baseDate.getMonth(), baseDate.getDate() + dayOffset);
@@ -81,7 +100,7 @@ const state = {
   selectedDateStr: todayStr,
   searchQuery: '',
   activeCategories: new Set(Object.keys(CATEGORIES)),
-  activeIntegrations: new Set(Object.keys(INTEGRATIONS)),
+  activeIntegrations: new Set(['canvas', 'gmail', 'outlook', 'teams']),
   categoryColors: {
     duedates: '#6366f1',
     clubs: '#8b5cf6',
@@ -90,12 +109,10 @@ const state = {
     sports: '#6366f1'
   },
   integrationsAuth: {
-    canvas: { connected: false, domain: '', username: '', token: '', icsUrl: '' },
-    canvas2: { connected: false, domain: '', username: '', token: '', icsUrl: '' },
-    vva: { connected: false, domain: 'virtualvirginia.instructure.com', username: '', token: '', icsUrl: '' },
-    gmail: { connected: false, domain: 'imap.gmail.com', username: '', password: '', token: '', icsUrl: '' },
-    outlook: { connected: false, domain: 'outlook.office365.com', username: '', password: '', token: '', icsUrl: '' },
-    teams: { connected: false, domain: 'graph.microsoft.com', username: '', password: '', token: '', icsUrl: '' }
+    canvas: createCalendarEntry('canvas', 'canvas', 'Canvas'),
+    gmail: createCalendarEntry('gmail', 'gmail', 'Gmail'),
+    outlook: createCalendarEntry('outlook', 'outlook', 'Outlook'),
+    teams: createCalendarEntry('teams', 'teams', 'Teams')
   },
   syncStatuses: {},
   events: []
@@ -117,16 +134,19 @@ function loadPersistedState() {
       const v3 = JSON.parse(v3Raw);
       if (v3.studentName) state.studentName = v3.studentName;
       if (v3.integrationsAuth) {
-        Object.keys(INTEGRATIONS).forEach(k => {
-          if (v3.integrationsAuth[k]) {
-            const c = v3.integrationsAuth[k];
-            const hasRealCreds = Boolean((c.token && c.token.trim()) || (c.icsUrl && c.icsUrl.trim()) || (c.password && c.password.trim()));
-            state.integrationsAuth[k] = {
-              ...state.integrationsAuth[k],
-              ...c,
-              connected: hasRealCreds ? Boolean(c.connected) : false
-            };
-          }
+        Object.keys(v3.integrationsAuth).forEach(k => {
+          if (k === 'vva') return;
+          const c = v3.integrationsAuth[k];
+          const type = c.type || (k.startsWith('canvas') ? 'canvas' : (PROVIDER_TYPES[k] ? k : 'canvas'));
+          const hasRealCreds = Boolean((c.token && c.token.trim()) || (c.icsUrl && c.icsUrl.trim()) || (c.password && c.password.trim()));
+          state.integrationsAuth[k] = {
+            ...createCalendarEntry(k, type, c.name || PROVIDER_TYPES[type]?.name || k),
+            ...c,
+            id: k,
+            type,
+            connected: hasRealCreds ? Boolean(c.connected) : false
+          };
+          state.activeIntegrations.add(k);
         });
       }
       if (Array.isArray(v3.events)) {
@@ -146,11 +166,23 @@ function loadPersistedState() {
       state.categoryColors = { ...state.categoryColors, ...parsed.categoryColors };
     }
     if (parsed.integrationsAuth) {
-      Object.keys(INTEGRATIONS).forEach(k => {
-        if (parsed.integrationsAuth[k]) {
-          state.integrationsAuth[k] = { ...state.integrationsAuth[k], ...parsed.integrationsAuth[k] };
-        }
+      const nextAuth = {};
+      Object.keys(parsed.integrationsAuth).forEach(k => {
+        if (k === 'vva') return;
+        const c = parsed.integrationsAuth[k];
+        if (!c || typeof c !== 'object') return;
+        const type = c.type || (k.startsWith('canvas') ? 'canvas' : (PROVIDER_TYPES[k] ? k : 'canvas'));
+        nextAuth[k] = {
+          ...createCalendarEntry(k, type, c.name || PROVIDER_TYPES[type]?.name || k),
+          ...c,
+          id: k,
+          type
+        };
       });
+      if (Object.keys(nextAuth).length > 0) {
+        state.integrationsAuth = nextAuth;
+        state.activeIntegrations = new Set(Object.keys(nextAuth));
+      }
     }
     if (Array.isArray(parsed.events)) {
       state.events = parsed.events.filter(e => !/^ev-\d+$/.test(e.id));
@@ -248,7 +280,7 @@ async function triggerLiveBackendSync() {
     const statusLines = Object.entries(state.syncStatuses)
       .filter(([, st]) => !st.skipped)
       .map(([k, st]) => {
-        const name = INTEGRATIONS[k]?.name || k;
+        const name = getCalendarName(k);
         return st.ok ? `${name}: ${st.count} synced` : `${name}: ${st.message || 'error'}`;
       });
 
@@ -261,7 +293,7 @@ async function triggerLiveBackendSync() {
     if (sideStatus) {
       const firstErr = Object.entries(state.syncStatuses).find(([, st]) => !st.skipped && !st.ok);
       if (firstErr) {
-        sideStatus.textContent = `${INTEGRATIONS[firstErr[0]]?.name}: ${firstErr[1].message}`;
+        sideStatus.textContent = `${getCalendarName(firstErr[0])}: ${firstErr[1].message}`;
       } else {
         sideStatus.textContent = `Synced ${liveTotal} live items`;
       }
@@ -286,9 +318,9 @@ function renderOnboardingIntegrations() {
   const list = document.getElementById('onboardingIntegrationsList');
   if (!list) return;
 
-  list.innerHTML = Object.values(INTEGRATIONS).map(intg => {
-    const auth = state.integrationsAuth[intg.id] || { connected: false };
-    const isLms = intg.id === 'canvas' || intg.id === 'canvas2' || intg.id === 'vva';
+  list.innerHTML = Object.values(state.integrationsAuth).map(auth => {
+    const intg = PROVIDER_TYPES[auth.type] || PROVIDER_TYPES.canvas;
+    const isLms = auth.type === 'canvas';
     const field1Val = isLms ? (auth.domain || '') : (auth.username || '');
     const field2Val = auth.token || auth.password || '';
     const icsVal = auth.icsUrl || '';
@@ -296,43 +328,74 @@ function renderOnboardingIntegrations() {
     return `
       <div class="integration-row ${auth.connected ? 'connected' : ''}">
         <div class="integration-row-top">
-          <div class="integration-label">
+          <div class="integration-label" style="flex:1; min-width:0;">
             <span class="circle-dot"></span>
-            <span>${intg.name}</span>
-            <span class="integration-sub">${intg.sub}</span>
+            <input
+              type="text"
+              class="minimal-input"
+              data-cal-name="${auth.id}"
+              value="${escapeHtml(auth.name || intg.name)}"
+              placeholder="Calendar name"
+              style="max-width:200px; padding:4px 8px; font-size:13px; font-weight:600;"
+            />
+            <span class="integration-sub">${intg.name} · ${intg.sub}</span>
           </div>
-          <button type="button" class="btn-flat" data-toggle-int="${intg.id}">
-            ${auth.connected ? 'Connected' : 'Use Login'}
-          </button>
+          <div style="display:flex; gap:6px; align-items:center;">
+            <button type="button" class="btn-flat" data-toggle-int="${auth.id}">
+              ${auth.connected ? 'Connected' : 'Use Login'}
+            </button>
+            <button type="button" class="btn-circle" data-remove-cal="${auth.id}" title="Remove calendar">✕</button>
+          </div>
         </div>
         <div class="integration-row-inputs">
           <div class="form-row-2">
             <input
               type="text"
               class="minimal-input"
-              data-int-f1="${intg.id}"
+              data-int-f1="${auth.id}"
               placeholder="${intg.field1Label}"
-              value="${field1Val}"
+              value="${escapeHtml(field1Val)}"
             />
             <input
               type="password"
               class="minimal-input"
-              data-int-f2="${intg.id}"
+              data-int-f2="${auth.id}"
               placeholder="${intg.field2Label}"
-              value="${field2Val}"
+              value="${escapeHtml(field2Val)}"
             />
           </div>
           <input
             type="text"
             class="minimal-input"
-            data-int-ics="${intg.id}"
+            data-int-ics="${auth.id}"
             placeholder="${intg.icsLabel}"
-            value="${icsVal}"
+            value="${escapeHtml(icsVal)}"
           />
         </div>
       </div>
     `;
   }).join('');
+
+  list.querySelectorAll('[data-cal-name]').forEach(input => {
+    input.addEventListener('input', (e) => {
+      const id = input.getAttribute('data-cal-name');
+      if (state.integrationsAuth[id]) {
+        state.integrationsAuth[id].name = e.target.value;
+        savePersistedState();
+      }
+    });
+  });
+
+  list.querySelectorAll('[data-remove-cal]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-remove-cal');
+      delete state.integrationsAuth[id];
+      state.activeIntegrations.delete(id);
+      savePersistedState();
+      renderOnboardingIntegrations();
+      updateOnboardingSummaryCount();
+    });
+  });
 
   list.querySelectorAll('[data-toggle-int]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -350,7 +413,7 @@ function renderOnboardingIntegrations() {
     input.addEventListener('input', (e) => {
       const id = input.getAttribute('data-int-f1');
       const val = e.target.value.trim();
-      if (id === 'canvas' || id === 'canvas2' || id === 'vva') {
+      if (state.integrationsAuth[id].type === 'canvas') {
         state.integrationsAuth[id].domain = val;
       } else {
         state.integrationsAuth[id].username = val;
@@ -444,7 +507,7 @@ function getFilteredEvents() {
     if (!state.activeCategories.has(ev.category)) return false;
     if (!state.activeIntegrations.has(ev.integration)) return false;
     if (q) {
-      const hay = `${ev.title} ${ev.location || ''} ${CATEGORIES[ev.category]?.name || ''} ${INTEGRATIONS[ev.integration]?.name || ''}`.toLowerCase();
+      const hay = `${ev.title} ${ev.location || ''} ${CATEGORIES[ev.category]?.name || ''} ${getCalendarName(ev.integration)}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
     return true;
@@ -508,16 +571,15 @@ function renderLeftSidebar() {
   });
 
   const intList = document.getElementById('integrationFilterList');
-  intList.innerHTML = Object.values(INTEGRATIONS).map(intg => {
-    const auth = state.integrationsAuth[intg.id];
-    const connected = auth && auth.connected;
-    const active = state.activeIntegrations.has(intg.id);
-    const count = state.events.filter(e => e.integration === intg.id).length;
+  intList.innerHTML = Object.values(state.integrationsAuth).map(auth => {
+    const connected = Boolean(auth && auth.connected);
+    const active = state.activeIntegrations.has(auth.id);
+    const count = state.events.filter(e => e.integration === auth.id).length;
     return `
       <div class="filter-item ${active && connected ? '' : 'inactive'}">
-        <div class="filter-left" data-int-filter="${intg.id}">
+        <div class="filter-left" data-int-filter="${auth.id}">
           <span class="node-circle" style="${connected && active ? 'background:var(--accent);' : ''}"></span>
-          <span>${intg.name}</span>
+          <span>${escapeHtml(auth.name || getCalendarName(auth.id))}</span>
         </div>
         <span class="filter-count">${connected ? count : 'off'}</span>
       </div>
@@ -673,7 +735,7 @@ function renderTodoView(container, events) {
             <button type="button" class="circle-check ${ev.completed ? 'checked' : ''}" style="border-color:${col}; ${ev.completed ? `background:${col};` : ''}" data-toggle-id="${ev.id}"></button>
             <div style="min-width:0; flex:1;">
               <div style="${ev.completed ? 'text-decoration:line-through;color:var(--muted);' : ''}">${ev.title}</div>
-              <div class="meta-mono">${ev.date} · ${ev.time} · ${INTEGRATIONS[ev.integration]?.name || ''}</div>
+              <div class="meta-mono">${ev.date} · ${ev.time} · ${escapeHtml(getCalendarName(ev.integration))}</div>
             </div>
           </div>
         `;
@@ -746,7 +808,7 @@ function renderOrbitView(container, events) {
           return `
             <div class="inspector-item" style="border-left-color:${col}; cursor:pointer;" data-orbit-id="${ev.id}">
               <div>${ev.title}</div>
-              <div class="meta-mono">${ev.date} · ${ev.time} · ${INTEGRATIONS[ev.integration]?.name || ''}</div>
+              <div class="meta-mono">${ev.date} · ${ev.time} · ${escapeHtml(getCalendarName(ev.integration))}</div>
             </div>
           `;
         }).join('')}
@@ -791,7 +853,7 @@ function renderTimelineView(container, events) {
                   <button type="button" class="circle-check ${ev.completed ? 'checked' : ''}" style="border-color:${col}; ${ev.completed ? `background:${col};` : ''}" data-toggle-id="${ev.id}"></button>
                   <span style="${ev.completed ? 'text-decoration:line-through;color:var(--muted);' : ''}">${ev.title}</span>
                 </div>
-                <span class="meta-mono">${ev.time} · ${CATEGORIES[ev.category]?.name || ''} · ${INTEGRATIONS[ev.integration]?.name || ''}</span>
+                <span class="meta-mono">${ev.time} · ${CATEGORIES[ev.category]?.name || ''} · ${escapeHtml(getCalendarName(ev.integration))}</span>
               </div>
             `;
           }).join('')}
@@ -833,7 +895,7 @@ function renderRightInspector() {
             <button type="button" class="circle-check ${ev.completed ? 'checked' : ''}" style="border-color:${col}; ${ev.completed ? `background:${col};` : ''}" data-inspector-check="${ev.id}"></button>
             <div style="min-width:0;flex:1;">
               <div style="${ev.completed ? 'text-decoration:line-through;color:var(--muted);' : ''}">${ev.title}</div>
-              <div class="meta-mono">${ev.time} · ${INTEGRATIONS[ev.integration]?.name || ''}</div>
+              <div class="meta-mono">${ev.time} · ${escapeHtml(getCalendarName(ev.integration))}</div>
               <div style="margin-top:4px;">
                 <select class="inspector-cat-select" data-ev-cat="${ev.id}" title="Change classification">
                   ${Object.values(CATEGORIES).map(c => `<option value="${c.id}" ${ev.category === c.id ? 'selected' : ''}>${c.name}</option>`).join('')}
@@ -966,6 +1028,24 @@ document.addEventListener('DOMContentLoaded', () => {
 
   renderAll();
 
+  document.getElementById('addCalBtn').addEventListener('click', () => {
+    const typeEl = document.getElementById('addCalType');
+    const nameEl = document.getElementById('addCalName');
+    const type = typeEl.value || 'canvas';
+    const existingOfType = Object.values(state.integrationsAuth).filter(a => a.type === type).length;
+    const defaultName = existingOfType === 0
+      ? (PROVIDER_TYPES[type]?.name || type)
+      : `${PROVIDER_TYPES[type]?.name || type} (${existingOfType + 1})`;
+    const name = (nameEl.value || '').trim() || defaultName;
+    const id = `${type}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    state.integrationsAuth[id] = createCalendarEntry(id, type, name);
+    state.activeIntegrations.add(id);
+    nameEl.value = '';
+    savePersistedState();
+    renderOnboardingIntegrations();
+    updateOnboardingSummaryCount();
+  });
+
   document.getElementById('launchCalendarBtn').addEventListener('click', closeOnboardingAndLaunch);
   document.getElementById('testLiveSyncBtn').addEventListener('click', triggerLiveBackendSync);
   document.getElementById('syncNowTopBtn').addEventListener('click', triggerLiveBackendSync);
@@ -1033,6 +1113,10 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   const openModal = () => {
+    const evIntSelect = document.getElementById('evIntegration');
+    evIntSelect.innerHTML = Object.values(state.integrationsAuth).map(auth => (
+      `<option value="${auth.id}">${escapeHtml(auth.name || getCalendarName(auth.id))}</option>`
+    )).join('');
     document.getElementById('evDate').value = state.selectedDateStr;
     evColorInput.value = state.categoryColors[evCategorySelect.value] || '#6366f1';
     eventModal.classList.remove('hidden');
